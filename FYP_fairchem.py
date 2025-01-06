@@ -82,7 +82,7 @@ from ase.visualize.plot import plot_atoms
 
 # Define the model atomic system with OH adsorbate for different catalysts
 def optimize_catalyst(material, checkpoint_path):
-    # Set up the atomic system for the catalyst (using fcc111 surface as an example)
+    # Set up the atomic system for the catalyst 
     slab = fcc111(material, size=(2, 2, 5), vacuum=10.0)
 
     # Create the OH molecule as a separate Atoms object
@@ -109,7 +109,7 @@ def optimize_catalyst(material, checkpoint_path):
     # Show the plot
     plt.show()
 
-# Example for different catalysts
+
 checkpoint_path = '/tmp/fairchem_checkpoints/eq2_153M_ec4_allmd.pt'
 
 # Call the function with different materials
@@ -429,35 +429,6 @@ with open('./ocp/docs/tutorials/structures.json') as f:
 sfcc = s['Pt']['O']['fcc']['0.25']    
 
 
-# In[14]:
-
-
-re3 = -2.58  # O -> 1/2 O2         re3 = -2.58 eV
-
-from ase import Atoms
-from fairchem.core.common.relaxation.ase_utils import OCPCalculator
-
-calc = OCPCalculator (checkpoint_path=checkpoint_path)
-atoms.set_calculator(calc)
-
-atoms = Atoms(sfcc['symbols'],
-              positions=sfcc['pos'],
-              cell=sfcc['cell'],
-              pbc=True)
-    
-from ase.optimize import BFGS
-opt = BFGS(atoms)
-
-opt.run(fmax=0.05, steps=100)
-re2 = atoms.get_potential_energy()
-    
-nO = 0
-for atom in atoms:
-    if atom.symbol == 'O':
-        nO += 1
-        re2 += re1 + re3
-
-print(re2 / nO)
 
 
 # In[ ]:
