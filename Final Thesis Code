@@ -1,0 +1,511 @@
+from fairchem.core.models.model_registry import available_pretrained_models
+print(available_pretrained_models)
+
+from fairchem.core.models.model_registry import model_name_to_local_file
+checkpoint_path = model_name_to_local_file('EquiformerV2-31M-S2EF-OC20-All+MD', local_cache='/tmp/fairchem_checkpoints/')
+checkpoint_path
+
+import csv
+import numpy as np
+import time
+from ase.build import fcc111, add_adsorbate
+from ase import Atoms
+from ase.optimize import BFGS
+from fairchem.core.common.relaxation.ase_utils import OCPCalculator
+
+# OCP Calculator 
+checkpoint_path = '/tmp/fairchem_checkpoints/eq2_31M_ec4_allmd.pt'
+calc = OCPCalculator(checkpoint_path=checkpoint_path, cpu=False)
+
+# Define alloys
+stoichs = {
+    "Pt3Ni": ("Ni", (3, 1)),
+    "Pt2Ni": ("Ni", (2, 1)),
+    "PtNi": ("Ni", (1, 1)),
+    "PtNi2": ("Ni", (1, 2)),
+    "PtNi3": ("Ni", (1, 3)),
+    
+    "Pt3Co": ("Co", (3, 1)),
+    "Pt2Co": ("Co", (2, 1)),
+    "PtCo": ("Co", (1, 1)),
+    "PtCo2": ("Co", (1, 2)),
+    "PtCo3": ("Co", (1, 3)),
+    
+    "Pt3Fe": ("Fe", (3, 1)),
+    "Pt2Fe": ("Fe", (2, 1)),
+    "PtFe": ("Fe", (1, 1)),
+    "PtFe2": ("Fe", (1, 2)),
+    "PtFe3": ("Fe", (1, 3)),
+
+    "Pt3Cu": ("Cu", (3, 1)),
+    "Pt2Cu": ("Cu", (2, 1)),
+    "PtCu": ("Cu", (1, 1)),
+    "PtCu2": ("Cu", (1, 2)),
+    "PtCu3": ("Cu", (1, 3)),
+
+    "Pt3Ru": ("Ru", (3, 1)),
+    "Pt2Ru": ("Ru", (2, 1)),
+    "PtRu": ("Ru", (1, 1)),
+    "PtRu2": ("Ru", (1, 2)),
+    "PtRu3": ("Ru", (1, 3)),
+
+    "Pt3Mn": ("Mn", (3, 1)),
+    "Pt2Mn": ("Mn", (2, 1)),
+    "PtMn": ("Mn", (1, 1)),
+    "PtMn2": ("Mn", (1, 2)),
+    "PtMn3": ("Mn", (1, 3)),
+
+    "Pt3Mo": ("Mo", (3, 1)),
+    "Pt2Mo": ("Mo", (2, 1)),
+    "PtMo": ("Mo", (1, 1)),
+    "PtMo2": ("Mo", (1, 2)),
+    "PtMo3": ("Mo", (1, 3)),
+
+    "Pt3Ag": ("Ag", (3, 1)),
+    "Pt2Ag": ("Ag", (2, 1)),
+    "PtAg": ("Ag", (1, 1)),
+    "PtAg2": ("Ag", (1, 2)),
+    "PtAg3": ("Ag", (1, 3)),
+
+    "Pt3Pd": ("Pd", (3, 1)),
+    "Pt2Pd": ("Pd", (2, 1)),
+    "PtPd": ("Pd", (1, 1)),
+    "PtPd2": ("Pd", (1, 2)),
+    "PtPd3": ("Pd", (1, 3)),
+
+    "Pt3Ir": ("Ir", (3, 1)),
+    "Pt2Ir": ("Ir", (2, 1)),
+    "PtIr": ("Ir", (1, 1)),
+    "PtIr2": ("Ir", (1, 2)),
+    "PtIr3": ("Ir", (1, 3)),
+
+}
+
+
+
+# Define adsorbate (Only OH)
+adsorbate = Atoms('OH', positions=[[0,0,0],[0,0,1.0]])
+
+# Save as CSV
+csv_file = "adsorption_energies.csv"
+
+# Compute adsorption energy and time taken
+def compute_adsorption_energy(slab_with_ads, slab_clean, adsorbate):
+    start_time = time.time()  # Start timing
+
+    # --- Slab + Ads ---
+    slab_with_ads.set_calculator(calc)
+    opt1 = BFGS(slab_with_ads, logfile=None)
+    opt1.run(fmax=0.05, steps=200)
+    E_slab_ads = slab_with_ads.get_potential_energy()
+
+    # --- Clean Slab ---
+    slab_clean.set_calculator(calc)
+    opt2 = BFGS(slab_clean, logfile=None)
+    opt2.run(fmax=0.05, steps=200)
+    E_slab_clean = slab_clean.get_potential_energy()
+
+    # --- Free Adsorbate ---
+    adsorbate.set_calculator(calc)
+    opt3 = BFGS(adsorbate, logfile=None)
+    opt3.run(fmax=0.05, steps=200)
+    E_adsorbate = adsorbate.get_potential_energy()
+
+    end_time = time.time()  # End timing
+    computation_time = end_time - start_time  # Compute elapsed time
+
+    return E_slab_ads - (E_slab_clean + E_adsorbate), computation_time
+
+with open(csv_file, mode='w', newline='') as file:
+    writer = csv.writer(file)
+    writer.writerow(["Alloy", "Dopant", "Base Metal", "Ratio", "Slab Size", "Vacuum (Å)", "Adsorbate", "Surface", "Adsorption Energy (eV)", "Computational Time (s)"])
+
+    for alloy_label, (dopant, ratio) in stoichs.items():
+        print(f"\n=== Testing {alloy_label} ===")
+        
+        # 1) Build alloy slab
+        slab = fcc111('Pt', size=(3,3,4), vacuum=10.0)
+        
+        # Doping the slab
+        total_atoms = len(slab)
+        a, b = ratio
+        dopant_fraction = b / float(a + b)
+        n_dopant = int(round(dopant_fraction * total_atoms))
+
+        all_indices = np.arange(total_atoms)
+        np.random.shuffle(all_indices)
+        dope_indices = all_indices[:n_dopant]
+
+        for i in dope_indices:
+            slab[i].symbol = dopant
+
+
+        slab_clean = slab.copy()
+        
+        # Add OH adsorbate
+        add_adsorbate(slab, adsorbate.copy(), height=1.3, position='fcc')
+        
+        # Compute adsorption energy and computational time
+        E_ads, comp_time = compute_adsorption_energy(slab_with_ads=slab, slab_clean=slab_clean, adsorbate=adsorbate.copy())
+        
+        print(f"Adsorption Energy for {alloy_label}: {E_ads:.4f} eV, Computational Time: {comp_time:.2f} s")
+        
+        writer.writerow([alloy_label, dopant, "Pt", f"{ratio[0]}:{ratio[1]}", "3x3x4", "10.0", "OH", "FCC111", E_ads, comp_time])
+
+print("\nAdsorption energies and computational times saved to:", csv_file)
+
+import matplotlib.pyplot as plt
+
+# Computational times for comparison
+methods = ["DFT", "OCP Calculator (ML)"]
+times = [300, 1.52]  # In hours
+
+plt.figure(figsize=(8, 6))
+plt.bar(methods, times, color=['blue', 'orange'])
+
+plt.ylabel("Computational Time (hours)")
+plt.title("Comparison of Computational Time: DFT vs. OCP Calculator")
+plt.ylim(0, 350)  # Adjusting the y-axis for clarity
+
+plt.show()
+
+import pandas as pd
+
+df = pd.read_csv("adsorption_energies.csv")
+
+# Sort by adsorption energy (most negative values are stronger adsorptions)
+df_sorted = df.sort_values(by="Adsorption Energy (eV)", ascending=True)
+
+# Define optimal adsorption energy range
+optimal_range = df_sorted[(df_sorted["Adsorption Energy (eV)"] >= -1.0) & 
+                          (df_sorted["Adsorption Energy (eV)"] <= -0.4)]
+
+print(df_sorted.head())
+print(optimal_range.head(10))
+
+import matplotlib.pyplot as plt
+
+df_sorted = df_sorted.sort_values(by="Alloy")
+
+# Plot adsorption energy
+plt.figure(figsize=(10, 6))
+plt.bar(df_sorted["Alloy"], df_sorted["Adsorption Energy (eV)"], color="royalblue")
+plt.axhline(y=-0.6, linestyle="--", color="red", label="Optimal Range")
+plt.axhline(y=-0.4, linestyle="--", color="red")
+plt.xlabel("Alloy Composition")
+plt.ylabel("Adsorption Energy (eV)")
+plt.title("Adsorption Energy for Different Alloys")
+plt.xticks(rotation=45)
+plt.legend()
+plt.show()
+
+
+# Volcano Plot (Not used in thesis results due to lack of solid reference for benchmark catalysts values) 
+benchmark_data = {
+    "Pt": -0.75,
+    "Ir": -0.85,
+    "Ru": -0.92,
+    "Ni": -0.67,
+    "Co": -0.73
+}
+
+your_alloys = df_sorted[["Alloy", "Adsorption Energy (eV)"]]
+
+plt.figure(figsize=(8,6))
+plt.scatter(your_alloys["Adsorption Energy (eV)"], range(len(your_alloys)), label="Your Alloys", color='blue')
+plt.scatter(benchmark_data.values(), range(len(benchmark_data)), label="Known Catalysts", color='red')
+
+plt.axvline(x=-0.8, linestyle="--", color="black", label="Optimal Range")
+plt.axvline(x=-0.4, linestyle="--", color="black")
+
+plt.xlabel("Adsorption Energy (eV)")
+plt.ylabel("Catalytic Activity (Arbitrary Units)")
+plt.legend()
+plt.title("Volcano Plot: Your Alloys vs Known Catalysts")
+plt.show()
+
+# Which alloys are closest to known catalysts
+df_sorted["Distance to Pt"] = abs(df_sorted["Adsorption Energy (eV)"] - benchmark_data["Pt"])
+df_sorted["Distance to Ir"] = abs(df_sorted["Adsorption Energy (eV)"] - benchmark_data["Ir"])
+df_sorted["Distance to Ru"] = abs(df_sorted["Adsorption Energy (eV)"] - benchmark_data["Ru"])
+
+closest_to_known = df_sorted.nsmallest(5, "Distance to Pt")
+print("Alloys Closest to Pt:", closest_to_known[["Alloy", "Adsorption Energy (eV)"]])
+
+import re
+
+# Extract metals from Alloy name
+df["Metals"] = df["Alloy"].apply(lambda x: re.findall(r"[A-Z][a-z]*", x))
+
+df["Metal1"] = df["Metals"].apply(lambda x: x[0] if len(x) > 0 else None)
+df["Metal2"] = df["Metals"].apply(lambda x: x[1] if len(x) > 1 else None)
+df["Metal3"] = df["Metals"].apply(lambda x: x[2] if len(x) > 2 else None)
+
+df.drop(columns=["Metals"], inplace=True)
+
+# Verify extraction
+print(df[["Alloy", "Metal1", "Metal2", "Metal3"]].drop_duplicates())
+print(df.columns)
+
+
+from matminer.featurizers.conversions import StrToComposition
+
+# Convert Alloy column (raw formulas) into pymatgen Composition objects
+str_comp = StrToComposition(target_col_id='composition_pmg')
+df = str_comp.featurize_dataframe(df, col_id='Alloy')
+
+print("Converted alloy formulas to Composition objects.")
+
+from matminer.featurizers.composition import ElementProperty
+
+# Initialize Magpie featurizer
+featurizer = ElementProperty.from_preset('magpie')
+
+# Check if features already exist
+existing_features = set(df.columns)
+new_features = set(featurizer.feature_labels())
+
+if not new_features.intersection(existing_features):
+    df = featurizer.featurize_dataframe(df, col_id='composition')
+    print(f"Added {len(featurizer.feature_labels())} features to dataset.")
+else:
+    print("Magpie features already exist in the dataset. Skipping featurization.")
+
+import numpy as np
+
+# Exclude Non-Numeric Columns
+non_numeric_cols = ['Alloy', 'Dopant', 'Base Metal', 'Ratio', 'Slab Size', 
+                    'Adsorbate', 'Surface', 'composition_pmg', 'composition']
+numeric_df = df.drop(columns=non_numeric_cols, errors='ignore')
+
+# Compute the Correlation Matrix
+corr_matrix = numeric_df.corr().abs()
+
+# Get Upper Triangle of the Correlation Matrix
+upper_tri = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+
+# Find Columns with High Correlation (>0.95)
+to_drop = [column for column in upper_tri.columns if any(upper_tri[column] > 0.95)]
+
+# Drop Highly Correlated Features
+df_cleaned = df.drop(columns=to_drop, errors='ignore')
+
+print(f"Removed {len(to_drop)} highly correlated features.")
+
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error
+from sklearn.preprocessing import StandardScaler
+
+# Select only numeric columns (drop non-numeric)
+X = df_cleaned.drop(columns=['Alloy', 'Dopant', 'Base Metal', 'Ratio', 'Slab Size', 
+                             'Adsorbate', 'Surface', 'composition_pmg', 'composition', 
+                             'Adsorption Energy (eV)'], errors='ignore')
+
+y = df_cleaned['Adsorption Energy (eV)']  # Target variable
+
+# Split data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# **Scale only for Ridge Regression**
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)  # Fit on training data
+X_test_scaled = scaler.transform(X_test)
+
+from sklearn.linear_model import Ridge
+from sklearn.ensemble import RandomForestRegressor
+from xgboost import XGBRegressor
+from sklearn.metrics import mean_squared_error, r2_score
+
+# Define models
+ridge = Ridge(alpha=1.0)  # L2 Regularization
+rf = RandomForestRegressor(n_estimators=200, random_state=42)
+xgb = XGBRegressor(n_estimators=200, learning_rate=0.05, max_depth=5, random_state=42)
+
+# Train models
+ridge.fit(X_train_scaled, y_train)  # Scaled data for Ridge
+rf.fit(X_train, y_train)  # No scaling for RF
+xgb.fit(X_train, y_train)  # No scaling for XGB
+
+# Predict
+y_pred_ridge = ridge.predict(X_test_scaled)  # Scaled input for Ridge
+y_pred_rf = rf.predict(X_test)  # No scaling for RF
+y_pred_xgb = xgb.predict(X_test)  # No scaling for XGB
+
+# Evaluate models
+mse_ridge = mean_squared_error(y_test, y_pred_ridge)
+r2_ridge = r2_score(y_test, y_pred_ridge)
+
+mse_rf = mean_squared_error(y_test, y_pred_rf)
+r2_rf = r2_score(y_test, y_pred_rf)
+
+mse_xgb = mean_squared_error(y_test, y_pred_xgb)
+r2_xgb = r2_score(y_test, y_pred_xgb)
+
+print(f"Ridge Regression R² Score: {r2_ridge:.4f}, MSE: {mse_ridge:.4f}")
+print(f"Random Forest R² Score: {r2_rf:.4f}, MSE: {mse_rf:.4f}")
+print(f"XGBoost R² Score: {r2_xgb:.4f}, MSE: {mse_xgb:.4f}")
+
+# GridSearch
+from sklearn.model_selection import GridSearchCV
+
+param_grid_rf = {
+    'n_estimators': [100, 300, 500],
+    'max_depth': [None, 10, 20, 30],
+    'min_samples_split': [2, 5, 10]
+}
+
+grid_rf = GridSearchCV(RandomForestRegressor(random_state=42), param_grid_rf, cv=5, scoring='r2', n_jobs=-1)
+grid_rf.fit(X_train, y_train) 
+
+print(f"Best Random Forest Params: {grid_rf.best_params_}")
+
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import cross_val_score
+
+# Train the optimized RF model
+rf_optimized = RandomForestRegressor(
+    max_depth=None,
+    min_samples_split=2,
+    n_estimators=100,
+    random_state=42
+)
+
+rf_optimized.fit(X_train, y_train)  #  No scaling needed
+
+# Evaluating using cross-validation
+rf_mse = -cross_val_score(rf_optimized, X_train, y_train, cv=5, scoring='neg_mean_squared_error').mean()
+rf_r2 = cross_val_score(rf_optimized, X_train, y_train, cv=5, scoring='r2').mean()
+
+print(f"Optimized Random Forest MSE: {rf_mse:.4f}")
+print(f"Optimized Random Forest R² Score: {rf_r2:.4f}")
+
+from sklearn.feature_selection import SelectKBest, f_regression
+import pandas as pd
+
+# Select the top 20 most predictive features
+selector = SelectKBest(score_func=f_regression, k=20)
+X_selected = selector.fit_transform(X_train, y_train)  # No scaling needed
+
+selected_features = selector.get_feature_names_out(input_features=X.columns)  
+X_selected = pd.DataFrame(X_selected, columns=selected_features)  # Now has proper names
+
+print(f"Reduced feature set to {X_selected.shape[1]} features.")
+
+# Re-train RF on the reduced feature set
+rf_reduced = RandomForestRegressor(
+    max_depth=None,
+    min_samples_split=10,
+    n_estimators=500,
+    random_state=42
+)
+
+rf_reduced.fit(X_selected, y_train) 
+
+# Evaluate the new model
+rf_mse_reduced = -cross_val_score(rf_reduced, X_selected, y_train, cv=5, scoring='neg_mean_squared_error').mean()
+rf_r2_reduced = cross_val_score(rf_reduced, X_selected, y_train, cv=5, scoring='r2').mean()
+
+print(f"Reduced Feature Set - Random Forest MSE: {rf_mse_reduced:.4f}")
+print(f"Reduced Feature Set - Random Forest R² Score: {rf_r2_reduced:.4f}")
+
+import numpy as np
+import pandas as pd
+
+dopant_elements = ['Ni', 'Co', 'Fe', 'Cu', 'Ru', 'Mn', 'Mo', 'Ag', 'Pd', 'Ir']
+n_samples = 50 
+
+# Generate strictly binary Pt-X compositions
+binary_alloys = []
+for _ in range(n_samples):
+    dopant = np.random.choice(dopant_elements)  # Select one dopant
+    pt_ratio = np.random.uniform(0.1, 0.9)  # Ensure Pt is at least 10%
+    dopant_ratio = round(1 - pt_ratio, 2)  # Remaining fraction goes to dopant
+    pt_ratio = round(pt_ratio, 2)  # Round to match formatting
+    
+    composition = f"Pt{pt_ratio}{dopant}{dopant_ratio}"
+    binary_alloys.append(composition)
+
+new_alloys_df = pd.DataFrame({'Alloy': binary_alloys})
+
+print(f"Successfully generated {len(binary_alloys)} proper binary Pt-X alloys.")
+print (new_alloys_df)
+
+from matminer.featurizers.conversions import StrToComposition
+from matminer.featurizers.composition import ElementProperty
+
+# Convert alloy formulas to pymatgen composition objects
+str_comp = StrToComposition(target_col_id='composition')
+new_alloys_df = str_comp.featurize_dataframe(new_alloys_df, col_id='Alloy')
+
+# Apply Magpie descriptor featurization
+featurizer = ElementProperty.from_preset('magpie')
+new_alloys_df = featurizer.featurize_dataframe(new_alloys_df, col_id='composition')
+
+print("New alloys featurized successfully.")
+
+import time
+# Find missing features
+missing_features = set(selected_features) - set(new_alloys_df.columns)
+extra_features = set(new_alloys_df.columns) - set(selected_features)
+
+print("Missing features in new alloys dataset:", missing_features)
+print("Extra features in new alloys dataset:", extra_features)
+
+# Fill missing features with zero
+for feature in missing_features:
+    new_alloys_df[feature] = 0
+
+# Reorder columns to match training data
+new_alloys_final = new_alloys_df[selected_features]
+# Start timing
+start_time = time.time()
+# Predict Adsorption Energy
+# Select only the features used in training
+new_alloys_final = new_alloys_final[selected_features]  # Ensure correct feature order
+
+# Predict adsorption energy
+predicted_energies = rf_reduced.predict(new_alloys_final)
+
+end_time = time.time()
+inference_time = end_time - start_time
+
+print(f"ML Inference Time for {len(new_alloys_final)} alloys: {inference_time:.4f} seconds")
+
+print("Predictions complete!")
+print(new_alloys_df[['Alloy', 'Predicted Adsorption Energy (eV)']].head(10))
+
+
+csv_filename = "predicted_alloy_adsorption_energies.csv"
+new_alloys_df.to_csv(csv_filename, index=False)
+
+import matplotlib.pyplot as plt
+
+# Plot Adsorption Energy Distribution
+plt.figure(figsize=(8,6))
+plt.scatter(df_results['Alloy'], df_results['Predicted Adsorption Energy (eV)'], color='blue', alpha=0.6)
+plt.axhline(-0.3, color='red', linestyle='--', label="Ideal HER range (-0.1 to -0.3 eV)")
+plt.axhline(-0.2, color='green', linestyle='--', label="Ideal OER range (-0.2 to -0.4 eV)")
+plt.axhline(-0.4, color='green', linestyle='--')
+plt.xlabel("Alloy Composition")
+plt.ylabel("Predicted Adsorption Energy (eV)")
+plt.title("Predicted Adsorption Energies for Alloy Catalysts")
+plt.xticks(rotation=90, fontsize=8)
+plt.legend()
+plt.show()
+
+from sklearn.model_selection import cross_val_score, KFold
+import numpy as np
+
+# Define K-Fold cross-validation 
+kfold = KFold(n_splits=5, shuffle=True, random_state=42)
+
+# Perform cross-validation
+cv_scores = cross_val_score(model, X, y, cv=kfold, scoring='neg_mean_squared_error')
+
+cv_mse = np.abs(cv_scores)
+mean_mse = np.mean(cv_mse)
+std_mse = np.std(cv_mse)
+
+print(f"Cross-Validation MSE: {mean_mse:.4f} ± {std_mse:.4f}")
+
